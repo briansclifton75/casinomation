@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import csv
 import html
+import io
 import json
+import os
+import threading
+import time
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
@@ -11,6 +17,31 @@ from .services import RewardService
 
 store = ClaimStore()
 service = RewardService(store)
+
+API_KEY = os.getenv("CASINOMATION_API_KEY", "").strip()
+SCHEDULE_ENABLED = os.getenv("CASINOMATION_SCHEDULER_ENABLED", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+SCHEDULE_TIME = os.getenv("CASINOMATION_DAILY_RUN_AT", "09:00").strip()
+
+
+def _extract_api_token(headers) -> str:
+    auth = headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth.removeprefix("Bearer ").strip()
+    return headers.get("X-API-Key", "").strip()
+
+
+def _csv_for_claims() -> str:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["id", "claimed_at", "source", "reward_type", "amount_sc", "status", "details"])
+    for c in service.recent_claims():
+        writer.writerow([c.id, c.claimed_at, c.source, c.reward_type, f"{c.amount_sc:.2f}", c.status, c.details])
+    return output.getvalue()
 
 
 class AppHandler(BaseHTTPRequestHandler):
@@ -26,6 +57,13 @@ class AppHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(payload).encode("utf-8"))
 
+    def _send_csv(self, content: str, filename: str = "claims.csv") -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.end_headers()
+        self.wfile.write(content.encode("utf-8"))
+
     def _read_payload(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length).decode("utf-8") if length else ""
@@ -37,6 +75,21 @@ class AppHandler(BaseHTTPRequestHandler):
         data = parse_qs(raw)
         return {k: v[0] if isinstance(v, list) and v else "" for k, v in data.items()}
 
+    def _require_api_auth(self) -> bool:
+        if not self.path.startswith("/api/") or self.path == "/api/health":
+            return True
+        if not API_KEY:
+            self._send_json(
+                {"error": "API key not configured on server"},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return False
+        token = _extract_api_token(self.headers)
+        if token != API_KEY:
+            self._send_json({"error": "Unauthorized"}, HTTPStatus.UNAUTHORIZED)
+            return False
+        return True
+
     def _render_home(self) -> str:
         totals = service.dashboard_totals()
         claims_rows = "".join(
@@ -44,6 +97,11 @@ class AppHandler(BaseHTTPRequestHandler):
             f"<td>{html.escape(c.reward_type)}</td><td>{c.amount_sc:.2f}</td>"
             f"<td>{html.escape(c.status)}</td><td>{html.escape(c.details)}</td></tr>"
             for c in service.recent_claims()
+        )
+        auth_hint = (
+            "Set CASINOMATION_API_KEY to protect API endpoints."
+            if not API_KEY
+            else "API auth enabled (Bearer token or X-API-Key)."
         )
         return f"""
 <!doctype html>
@@ -61,6 +119,7 @@ class AppHandler(BaseHTTPRequestHandler):
     th, td {{ border-bottom: 1px solid #334155; padding: .5rem; text-align: left; vertical-align: top; }}
     .layout {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }}
     code {{ background: #020617; border-radius: 4px; padding: 2px 6px; }}
+    .muted {{ color: #94a3b8; }}
   </style>
 </head>
 <body>
@@ -102,7 +161,8 @@ class AppHandler(BaseHTTPRequestHandler):
     <tbody>{claims_rows}</tbody>
   </table>
 
-  <p>API: <code>GET /api/health</code>, <code>GET /api/totals</code>, <code>GET /api/claims</code>, <code>POST /api/collect</code>, <code>POST /api/email</code></p>
+  <p>API: <code>GET /api/health</code>, <code>GET /api/totals</code>, <code>GET /api/claims</code>, <code>GET /api/claims.csv</code>, <code>POST /api/collect</code>, <code>POST /api/email</code></p>
+  <p class=\"muted\">{html.escape(auth_hint)} Scheduler: {'enabled' if SCHEDULE_ENABLED else 'disabled'} at {html.escape(SCHEDULE_TIME)} local time.</p>
 </body>
 </html>
 """
@@ -116,6 +176,9 @@ class AppHandler(BaseHTTPRequestHandler):
             self._send_json({"status": "ok"})
             return
 
+        if not self._require_api_auth():
+            return
+
         if self.path == "/api/totals":
             self._send_json(service.dashboard_totals())
             return
@@ -125,22 +188,47 @@ class AppHandler(BaseHTTPRequestHandler):
             self._send_json(claims)
             return
 
+        if self.path == "/api/claims.csv":
+            self._send_csv(_csv_for_claims())
+            return
+
         self._send_html("Not Found", HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:  # noqa: N802
         payload = self._read_payload()
 
-        if self.path in ("/collect", "/api/collect"):
-            events = [e.__dict__ for e in service.run_daily()]
-            if self.path.startswith("/api/"):
-                self._send_json({"events": events, "count": len(events)})
-                return
+        if self.path == "/collect":
+            service.run_daily()
             self.send_response(HTTPStatus.SEE_OTHER)
             self.send_header("Location", "/")
             self.end_headers()
             return
 
-        if self.path in ("/email", "/api/email"):
+        if self.path == "/email":
+            sender = payload.get("sender", "")
+            subject = payload.get("subject", "")
+            body = payload.get("body", "")
+            if not (sender and subject and body):
+                self._send_json(
+                    {"error": "sender, subject, and body are required"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            service.ingest_email(sender, subject, body)
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header("Location", "/")
+            self.end_headers()
+            return
+
+        if self.path.startswith("/api/") and not self._require_api_auth():
+            return
+
+        if self.path == "/api/collect":
+            events = [e.__dict__ for e in service.run_daily()]
+            self._send_json({"events": events, "count": len(events)})
+            return
+
+        if self.path == "/api/email":
             sender = payload.get("sender", "")
             subject = payload.get("subject", "")
             body = payload.get("body", "")
@@ -152,19 +240,42 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
 
             events = [e.__dict__ for e in service.ingest_email(sender, subject, body)]
-            if self.path.startswith("/api/"):
-                self._send_json({"events": events, "count": len(events)})
-                return
-
-            self.send_response(HTTPStatus.SEE_OTHER)
-            self.send_header("Location", "/")
-            self.end_headers()
+            self._send_json({"events": events, "count": len(events)})
             return
 
         self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
 
+def _scheduler_loop(stop_event: threading.Event) -> None:
+    last_run_date = ""
+    while not stop_event.is_set():
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        hhmm = now.strftime("%H:%M")
+
+        if hhmm == SCHEDULE_TIME and today != last_run_date:
+            service.run_daily()
+            last_run_date = today
+            print(f"[scheduler] Daily collector executed at {now.isoformat(timespec='seconds')}")
+
+        stop_event.wait(20)
+
+
 def run(host: str = "0.0.0.0", port: int = 8000) -> None:
+    stop_event = threading.Event()
+
+    if SCHEDULE_ENABLED:
+        scheduler = threading.Thread(
+            target=_scheduler_loop,
+            args=(stop_event,),
+            daemon=True,
+            name="daily-collector-scheduler",
+        )
+        scheduler.start()
+
     server = ThreadingHTTPServer((host, port), AppHandler)
     print(f"Casinomation running on http://{host}:{port}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        stop_event.set()

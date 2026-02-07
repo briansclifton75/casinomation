@@ -20,19 +20,40 @@ Optional flags:
 python app.py --host 127.0.0.1 --port 8080
 ```
 
-Optional DB override:
+## Phase 2 features
+
+- API authentication with `CASINOMATION_API_KEY`
+- Daily scheduled collector run with `CASINOMATION_DAILY_RUN_AT`
+- CSV export endpoint (`/api/claims.csv`)
+
+## Configuration
 
 ```bash
 export CASINOMATION_DB=/path/to/casinomation.db
+export CASINOMATION_API_KEY="replace-with-strong-token"
+export CASINOMATION_DAILY_RUN_AT="09:00"     # local machine time, HH:MM
+export CASINOMATION_SCHEDULER_ENABLED="true" # true/false
 ```
 
 ## API endpoints
 
+Public:
+
 - `GET /api/health`
+
+Protected (requires `Authorization: Bearer <key>` or `X-API-Key: <key>`):
+
 - `GET /api/totals`
 - `GET /api/claims`
+- `GET /api/claims.csv`
 - `POST /api/collect`
 - `POST /api/email` with JSON `{ "sender": "...", "subject": "...", "body": "..." }`
+
+### Example
+
+```bash
+curl -H "Authorization: Bearer $CASINOMATION_API_KEY" http://localhost:8000/api/totals
+```
 
 ## Run tests
 
