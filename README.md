@@ -20,19 +20,32 @@ Optional flags:
 python app.py --host 127.0.0.1 --port 8080
 ```
 
-## Phase 2 features
+## Phase 3 features
 
-- API authentication with `CASINOMATION_API_KEY`
-- Daily scheduled collector run with `CASINOMATION_DAILY_RUN_AT`
+- API authentication (`CASINOMATION_API_KEY` or rotating `CASINOMATION_API_KEYS`)
+- Daily scheduled collector run (`CASINOMATION_DAILY_RUN_AT`)
 - CSV export endpoint (`/api/claims.csv`)
+- Basic in-memory API rate limiting
+- Docker + docker-compose
+- GitHub Actions CI (tests + compile + docker build)
 
 ## Configuration
 
 ```bash
 export CASINOMATION_DB=/path/to/casinomation.db
+
+# single key
 export CASINOMATION_API_KEY="replace-with-strong-token"
+
+# key rotation (comma-separated active keys)
+export CASINOMATION_API_KEYS="current-key,next-key"
+
 export CASINOMATION_DAILY_RUN_AT="09:00"     # local machine time, HH:MM
 export CASINOMATION_SCHEDULER_ENABLED="true" # true/false
+
+export CASINOMATION_RATE_LIMIT_ENABLED="true"
+export CASINOMATION_RATE_LIMIT_MAX="60"
+export CASINOMATION_RATE_LIMIT_WINDOW_SEC="60"
 ```
 
 ## API endpoints
@@ -55,10 +68,19 @@ Protected (requires `Authorization: Bearer <key>` or `X-API-Key: <key>`):
 curl -H "Authorization: Bearer $CASINOMATION_API_KEY" http://localhost:8000/api/totals
 ```
 
+## Docker
+
+```bash
+docker compose up --build
+```
+
+Then open <http://localhost:8000>.
+
 ## Run tests
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py'
+python -m py_compile app.py casinomation/*.py
 ```
 
 ## Notes

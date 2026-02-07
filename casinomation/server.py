@@ -18,7 +18,13 @@ from .services import RewardService
 store = ClaimStore()
 service = RewardService(store)
 
-API_KEY = os.getenv("CASINOMATION_API_KEY", "").strip()
+_RAW_API_KEYS = os.getenv("CASINOMATION_API_KEYS", "").strip()
+if _RAW_API_KEYS:
+    API_KEYS = {k.strip() for k in _RAW_API_KEYS.split(",") if k.strip()}
+else:
+    single = os.getenv("CASINOMATION_API_KEY", "").strip()
+    API_KEYS = {single} if single else set()
+
 SCHEDULE_ENABLED = os.getenv("CASINOMATION_SCHEDULER_ENABLED", "true").lower() in {
     "1",
     "true",
@@ -27,12 +33,47 @@ SCHEDULE_ENABLED = os.getenv("CASINOMATION_SCHEDULER_ENABLED", "true").lower() i
 }
 SCHEDULE_TIME = os.getenv("CASINOMATION_DAILY_RUN_AT", "09:00").strip()
 
+RATE_LIMIT_ENABLED = os.getenv("CASINOMATION_RATE_LIMIT_ENABLED", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+RATE_LIMIT_MAX = int(os.getenv("CASINOMATION_RATE_LIMIT_MAX", "60"))
+RATE_LIMIT_WINDOW_SEC = int(os.getenv("CASINOMATION_RATE_LIMIT_WINDOW_SEC", "60"))
+
+_rate_limit_lock = threading.Lock()
+_rate_limit_buckets: dict[str, tuple[float, int]] = {}
+
 
 def _extract_api_token(headers) -> str:
     auth = headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         return auth.removeprefix("Bearer ").strip()
     return headers.get("X-API-Key", "").strip()
+
+
+def _client_identifier(handler: BaseHTTPRequestHandler) -> str:
+    token = _extract_api_token(handler.headers)
+    if token:
+        return f"token:{token[:8]}"
+    ip = handler.client_address[0] if handler.client_address else "unknown"
+    return f"ip:{ip}"
+
+
+def _rate_limited(key: str) -> bool:
+    if not RATE_LIMIT_ENABLED:
+        return False
+
+    now = time.time()
+    with _rate_limit_lock:
+        window_start, count = _rate_limit_buckets.get(key, (now, 0))
+        if now - window_start >= RATE_LIMIT_WINDOW_SEC:
+            window_start, count = now, 0
+
+        count += 1
+        _rate_limit_buckets[key] = (window_start, count)
+        return count > RATE_LIMIT_MAX
 
 
 def _csv_for_claims() -> str:
@@ -75,17 +116,33 @@ class AppHandler(BaseHTTPRequestHandler):
         data = parse_qs(raw)
         return {k: v[0] if isinstance(v, list) and v else "" for k, v in data.items()}
 
+    def _rate_limit_guard(self) -> bool:
+        if not self.path.startswith("/api/"):
+            return True
+        key = _client_identifier(self)
+        if _rate_limited(key):
+            self._send_json(
+                {
+                    "error": "Too Many Requests",
+                    "limit": RATE_LIMIT_MAX,
+                    "window_sec": RATE_LIMIT_WINDOW_SEC,
+                },
+                HTTPStatus.TOO_MANY_REQUESTS,
+            )
+            return False
+        return True
+
     def _require_api_auth(self) -> bool:
         if not self.path.startswith("/api/") or self.path == "/api/health":
             return True
-        if not API_KEY:
+        if not API_KEYS:
             self._send_json(
                 {"error": "API key not configured on server"},
                 HTTPStatus.SERVICE_UNAVAILABLE,
             )
             return False
         token = _extract_api_token(self.headers)
-        if token != API_KEY:
+        if token not in API_KEYS:
             self._send_json({"error": "Unauthorized"}, HTTPStatus.UNAUTHORIZED)
             return False
         return True
@@ -99,9 +156,9 @@ class AppHandler(BaseHTTPRequestHandler):
             for c in service.recent_claims()
         )
         auth_hint = (
-            "Set CASINOMATION_API_KEY to protect API endpoints."
-            if not API_KEY
-            else "API auth enabled (Bearer token or X-API-Key)."
+            "Set CASINOMATION_API_KEY or CASINOMATION_API_KEYS to protect API endpoints."
+            if not API_KEYS
+            else f"API auth enabled ({len(API_KEYS)} active key(s); supports rotation)."
         )
         return f"""
 <!doctype html>
@@ -162,7 +219,7 @@ class AppHandler(BaseHTTPRequestHandler):
   </table>
 
   <p>API: <code>GET /api/health</code>, <code>GET /api/totals</code>, <code>GET /api/claims</code>, <code>GET /api/claims.csv</code>, <code>POST /api/collect</code>, <code>POST /api/email</code></p>
-  <p class=\"muted\">{html.escape(auth_hint)} Scheduler: {'enabled' if SCHEDULE_ENABLED else 'disabled'} at {html.escape(SCHEDULE_TIME)} local time.</p>
+  <p class=\"muted\">{html.escape(auth_hint)} Scheduler: {'enabled' if SCHEDULE_ENABLED else 'disabled'} at {html.escape(SCHEDULE_TIME)} local time. Rate limit: {'on' if RATE_LIMIT_ENABLED else 'off'} ({RATE_LIMIT_MAX}/{RATE_LIMIT_WINDOW_SEC}s).</p>
 </body>
 </html>
 """
@@ -174,6 +231,9 @@ class AppHandler(BaseHTTPRequestHandler):
 
         if self.path in ("/health", "/api/health"):
             self._send_json({"status": "ok"})
+            return
+
+        if not self._rate_limit_guard():
             return
 
         if not self._require_api_auth():
@@ -220,8 +280,11 @@ class AppHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        if self.path.startswith("/api/") and not self._require_api_auth():
-            return
+        if self.path.startswith("/api/"):
+            if not self._rate_limit_guard():
+                return
+            if not self._require_api_auth():
+                return
 
         if self.path == "/api/collect":
             events = [e.__dict__ for e in service.run_daily()]

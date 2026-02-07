@@ -1,0 +1,17 @@
+version: "3.9"
+services:
+  casinomation:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      CASINOMATION_API_KEYS: "change-me-now,change-me-next"
+      CASINOMATION_DAILY_RUN_AT: "09:00"
+      CASINOMATION_SCHEDULER_ENABLED: "true"
+      CASINOMATION_RATE_LIMIT_ENABLED: "true"
+      CASINOMATION_RATE_LIMIT_MAX: "60"
+      CASINOMATION_RATE_LIMIT_WINDOW_SEC: "60"
+      CASINOMATION_DB: /data/casinomation.db
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
