@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-DB_PATH = Path(__file__).resolve().parent.parent / "casinomation.db"
+DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "casinomation.db"
+DB_PATH = Path(os.getenv("CASINOMATION_DB", str(DEFAULT_DB_PATH))).expanduser()
 
 
 @dataclass

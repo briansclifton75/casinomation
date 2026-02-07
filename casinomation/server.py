@@ -20,22 +20,32 @@ class AppHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(page.encode("utf-8"))
 
-    def _send_json(self, payload: dict, status: HTTPStatus = HTTPStatus.OK) -> None:
+    def _send_json(self, payload: dict | list, status: HTTPStatus = HTTPStatus.OK) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps(payload).encode("utf-8"))
 
-    def do_GET(self) -> None:  # noqa: N802
-        if self.path == "/":
-            totals = service.dashboard_totals()
-            claims_rows = "".join(
-                f"<tr><td>{html.escape(c.claimed_at)}</td><td>{html.escape(c.source)}</td>"
-                f"<td>{html.escape(c.reward_type)}</td><td>{c.amount_sc:.2f}</td>"
-                f"<td>{html.escape(c.status)}</td><td>{html.escape(c.details)}</td></tr>"
-                for c in service.recent_claims()
-            )
-            page = f"""
+    def _read_payload(self) -> dict:
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length).decode("utf-8") if length else ""
+        content_type = self.headers.get("Content-Type", "")
+
+        if "application/json" in content_type:
+            return json.loads(raw) if raw else {}
+
+        data = parse_qs(raw)
+        return {k: v[0] if isinstance(v, list) and v else "" for k, v in data.items()}
+
+    def _render_home(self) -> str:
+        totals = service.dashboard_totals()
+        claims_rows = "".join(
+            f"<tr><td>{html.escape(c.claimed_at)}</td><td>{html.escape(c.source)}</td>"
+            f"<td>{html.escape(c.reward_type)}</td><td>{c.amount_sc:.2f}</td>"
+            f"<td>{html.escape(c.status)}</td><td>{html.escape(c.details)}</td></tr>"
+            for c in service.recent_claims()
+        )
+        return f"""
 <!doctype html>
 <html>
 <head>
@@ -50,6 +60,7 @@ class AppHandler(BaseHTTPRequestHandler):
     table {{ width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: .9rem; }}
     th, td {{ border-bottom: 1px solid #334155; padding: .5rem; text-align: left; vertical-align: top; }}
     .layout {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }}
+    code {{ background: #020617; border-radius: 4px; padding: 2px 6px; }}
   </style>
 </head>
 <body>
@@ -90,38 +101,61 @@ class AppHandler(BaseHTTPRequestHandler):
     <thead><tr><th>Time</th><th>Source</th><th>Type</th><th>SC</th><th>Status</th><th>Details</th></tr></thead>
     <tbody>{claims_rows}</tbody>
   </table>
+
+  <p>API: <code>GET /api/health</code>, <code>GET /api/totals</code>, <code>GET /api/claims</code>, <code>POST /api/collect</code>, <code>POST /api/email</code></p>
 </body>
 </html>
 """
-            self._send_html(page)
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/":
+            self._send_html(self._render_home())
             return
 
-        if self.path == "/health":
+        if self.path in ("/health", "/api/health"):
             self._send_json({"status": "ok"})
+            return
+
+        if self.path == "/api/totals":
+            self._send_json(service.dashboard_totals())
+            return
+
+        if self.path == "/api/claims":
+            claims = [c.__dict__ for c in service.recent_claims()]
+            self._send_json(claims)
             return
 
         self._send_html("Not Found", HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:  # noqa: N802
-        length = int(self.headers.get("Content-Length", "0"))
-        data = self.rfile.read(length).decode("utf-8")
-        payload = parse_qs(data)
+        payload = self._read_payload()
 
-        if self.path == "/collect":
-            service.run_daily()
+        if self.path in ("/collect", "/api/collect"):
+            events = [e.__dict__ for e in service.run_daily()]
+            if self.path.startswith("/api/"):
+                self._send_json({"events": events, "count": len(events)})
+                return
             self.send_response(HTTPStatus.SEE_OTHER)
             self.send_header("Location", "/")
             self.end_headers()
             return
 
-        if self.path == "/email":
-            sender = payload.get("sender", [""])[0]
-            subject = payload.get("subject", [""])[0]
-            body = payload.get("body", [""])[0]
+        if self.path in ("/email", "/api/email"):
+            sender = payload.get("sender", "")
+            subject = payload.get("subject", "")
+            body = payload.get("body", "")
             if not (sender and subject and body):
-                self._send_json({"error": "sender, subject, and body are required"}, HTTPStatus.BAD_REQUEST)
+                self._send_json(
+                    {"error": "sender, subject, and body are required"},
+                    HTTPStatus.BAD_REQUEST,
+                )
                 return
-            service.ingest_email(sender, subject, body)
+
+            events = [e.__dict__ for e in service.ingest_email(sender, subject, body)]
+            if self.path.startswith("/api/"):
+                self._send_json({"events": events, "count": len(events)})
+                return
+
             self.send_response(HTTPStatus.SEE_OTHER)
             self.send_header("Location", "/")
             self.end_headers()

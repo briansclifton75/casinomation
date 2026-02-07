@@ -14,6 +14,26 @@ python app.py
 
 Open <http://localhost:8000>.
 
+Optional flags:
+
+```bash
+python app.py --host 127.0.0.1 --port 8080
+```
+
+Optional DB override:
+
+```bash
+export CASINOMATION_DB=/path/to/casinomation.db
+```
+
+## API endpoints
+
+- `GET /api/health`
+- `GET /api/totals`
+- `GET /api/claims`
+- `POST /api/collect`
+- `POST /api/email` with JSON `{ "sender": "...", "subject": "...", "body": "..." }`
+
 ## Run tests
 
 ```bash
