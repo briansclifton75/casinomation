@@ -32,6 +32,7 @@ SCHEDULE_ENABLED = os.getenv("CASINOMATION_SCHEDULER_ENABLED", "true").lower() i
     "on",
 }
 SCHEDULE_TIME = os.getenv("CASINOMATION_DAILY_RUN_AT", "09:00").strip()
+EMAIL_SCAN_INTERVAL_MIN = int(os.getenv("CASINOMATION_EMAIL_SCAN_INTERVAL_MIN", "15"))
 
 RATE_LIMIT_ENABLED = os.getenv("CASINOMATION_RATE_LIMIT_ENABLED", "true").lower() in {
     "1",
@@ -218,7 +219,7 @@ class AppHandler(BaseHTTPRequestHandler):
     <tbody>{claims_rows}</tbody>
   </table>
 
-  <p>API: <code>GET /api/health</code>, <code>GET /api/totals</code>, <code>GET /api/claims</code>, <code>GET /api/claims.csv</code>, <code>POST /api/collect</code>, <code>POST /api/email</code></p>
+  <p>API: <code>GET /api/health</code>, <code>GET /api/totals</code>, <code>GET /api/claims</code>, <code>GET /api/claims.csv</code>, <code>POST /api/collect</code>, <code>POST /api/email</code>, <code>POST /api/email/scan</code></p>
   <p class=\"muted\">{html.escape(auth_hint)} Scheduler: {'enabled' if SCHEDULE_ENABLED else 'disabled'} at {html.escape(SCHEDULE_TIME)} local time. Rate limit: {'on' if RATE_LIMIT_ENABLED else 'off'} ({RATE_LIMIT_MAX}/{RATE_LIMIT_WINDOW_SEC}s).</p>
 </body>
 </html>
@@ -306,11 +307,30 @@ class AppHandler(BaseHTTPRequestHandler):
             self._send_json({"events": events, "count": len(events)})
             return
 
+        if self.path == "/api/email/scan":
+            if not service.imap.configured():
+                self._send_json(
+                    {
+                        "error": "IMAP credentials not configured",
+                        "required": [
+                            "CASINOMATION_IMAP_USER",
+                            "CASINOMATION_IMAP_APP_PASSWORD",
+                        ],
+                    },
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
+            max_messages = int(payload.get("max_messages", 20) or 20)
+            summary = service.scan_email_inbox(max_messages=max_messages)
+            self._send_json(summary)
+            return
+
         self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
 
 def _scheduler_loop(stop_event: threading.Event) -> None:
     last_run_date = ""
+    last_email_scan_ts = 0.0
     while not stop_event.is_set():
         now = datetime.now()
         today = now.strftime("%Y-%m-%d")
@@ -320,6 +340,14 @@ def _scheduler_loop(stop_event: threading.Event) -> None:
             service.run_daily()
             last_run_date = today
             print(f"[scheduler] Daily collector executed at {now.isoformat(timespec='seconds')}")
+
+        if service.imap.configured() and EMAIL_SCAN_INTERVAL_MIN > 0:
+            now_ts = time.time()
+            if now_ts - last_email_scan_ts >= EMAIL_SCAN_INTERVAL_MIN * 60:
+                summary = service.scan_email_inbox(max_messages=30)
+                last_email_scan_ts = now_ts
+                if summary["new_events"]:
+                    print(f"[scheduler] Email scan found {summary['new_events']} new promo events")
 
         stop_event.wait(20)
 

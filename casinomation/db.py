@@ -47,6 +47,16 @@ class ClaimStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ingested_messages (
+                    message_id TEXT PRIMARY KEY,
+                    sender TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    ingested_at TEXT NOT NULL
+                )
+                """
+            )
 
     def add_claim(
         self,
@@ -92,3 +102,22 @@ class ClaimStore:
             "successful_claims": float(row["successful_claims"]),
             "unresolved": float(row["unresolved"]),
         }
+
+    def already_ingested(self, message_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM ingested_messages WHERE message_id = ? LIMIT 1",
+                (message_id,),
+            ).fetchone()
+        return bool(row)
+
+    def mark_ingested(self, message_id: str, sender: str, subject: str) -> None:
+        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO ingested_messages (message_id, sender, subject, ingested_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (message_id, sender, subject, now),
+            )

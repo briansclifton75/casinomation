@@ -26,6 +26,7 @@ python app.py --host 127.0.0.1 --port 8080
 - Daily scheduled collector run (`CASINOMATION_DAILY_RUN_AT`)
 - CSV export endpoint (`/api/claims.csv`)
 - Basic in-memory API rate limiting
+- Gmail IMAP inbox scanning + promo ingestion (deduplicated)
 - Docker + docker-compose
 - GitHub Actions CI (tests + compile + docker build)
 
@@ -46,6 +47,14 @@ export CASINOMATION_SCHEDULER_ENABLED="true" # true/false
 export CASINOMATION_RATE_LIMIT_ENABLED="true"
 export CASINOMATION_RATE_LIMIT_MAX="60"
 export CASINOMATION_RATE_LIMIT_WINDOW_SEC="60"
+
+# Gmail IMAP ingestion (app password, not your normal password)
+export CASINOMATION_IMAP_HOST="imap.gmail.com"
+export CASINOMATION_IMAP_PORT="993"
+export CASINOMATION_IMAP_USER="you@gmail.com"
+export CASINOMATION_IMAP_APP_PASSWORD="xxxx xxxx xxxx xxxx"
+export CASINOMATION_EMAIL_ALLOWLIST="chumbacasino,globalpoker,luckyland"
+export CASINOMATION_EMAIL_SCAN_INTERVAL_MIN="15"
 ```
 
 ## API endpoints
@@ -61,6 +70,7 @@ Protected (requires `Authorization: Bearer <key>` or `X-API-Key: <key>`):
 - `GET /api/claims.csv`
 - `POST /api/collect`
 - `POST /api/email` with JSON `{ "sender": "...", "subject": "...", "body": "..." }`
+- `POST /api/email/scan` with optional JSON `{ "max_messages": 30 }`
 
 ### Example
 

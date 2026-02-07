@@ -5,6 +5,7 @@ from typing import Iterable
 import re
 
 from .db import ClaimStore
+from .email_ingest import GmailPromoIngestor
 
 
 @dataclass
@@ -91,6 +92,7 @@ class RewardService:
         self.store = store
         self.collector = CasinoCollector(store)
         self.parser = EmailPromoParser(store)
+        self.imap = GmailPromoIngestor()
 
     def run_daily(self) -> list[RewardEvent]:
         return self.collector.run_daily_collection()
@@ -103,3 +105,25 @@ class RewardService:
 
     def dashboard_totals(self) -> dict[str, float]:
         return self.store.totals()
+
+    def scan_email_inbox(self, max_messages: int = 20) -> dict[str, int]:
+        scanned = 0
+        new_messages = 0
+        new_events = 0
+
+        for msg in self.imap.fetch_recent(max_messages=max_messages):
+            scanned += 1
+            message_id = msg["message_id"]
+            if self.store.already_ingested(message_id):
+                continue
+
+            events = self.ingest_email(msg["sender"], msg["subject"], msg["body"])
+            self.store.mark_ingested(message_id, msg["sender"], msg["subject"])
+            new_messages += 1
+            new_events += len(events)
+
+        return {
+            "scanned": scanned,
+            "new_messages": new_messages,
+            "new_events": new_events,
+        }
