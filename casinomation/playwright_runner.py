@@ -50,6 +50,26 @@ ADAPTERS = {
         "claim_selector": 'button:has-text("Claim")',
         "google_button": 'button:has-text("Google"), a:has-text("Google")',
     },
+    "yay": {
+        "login_url": "https://www.yaycasino.com/",
+        "user_env": "CASINOMATION_YAY_USER",
+        "pass_env": "CASINOMATION_YAY_PASSWORD",
+        "user_selector": 'input[type="email"]',
+        "pass_selector": 'input[type="password"]',
+        "login_button": 'button:has-text("Login"), button:has-text("Log In")',
+        "claim_selector": 'button:has-text("Claim"), a:has-text("Claim")',
+        "google_button": 'button:has-text("Google"), a:has-text("Google")',
+    },
+    "hardrock": {
+        "login_url": "https://app.hardrock.bet/",
+        "user_env": "CASINOMATION_HARDROCK_USER",
+        "pass_env": "CASINOMATION_HARDROCK_PASSWORD",
+        "user_selector": 'input[type="email"], input[name="email"]',
+        "pass_selector": 'input[type="password"], input[name="password"]',
+        "login_button": 'button:has-text("Login"), button:has-text("Log In")',
+        "claim_selector": 'button:has-text("Claim"), a:has-text("Claim")',
+        "google_button": 'button:has-text("Google"), a:has-text("Google")',
+    },
 }
 
 
