@@ -34,14 +34,22 @@ ADAPTERS = {
         "google_button": 'button:has-text("Google"), a:has-text("Google")',
     },
     "modo": {
-        "login_url": "https://modo.us/lobby",
+        "login_url": "https://modo.us/promotions",
         "user_env": "CASINOMATION_MODO_USER",
         "pass_env": "CASINOMATION_MODO_PASSWORD",
         "user_selector": 'input[type="email"]',
         "pass_selector": 'input[type="password"]',
         "login_button": 'button:has-text("Log In")',
-        "claim_selector": 'button:has-text("Claim")',
+        "claim_selector": 'a:has-text("Claim now"), button:has-text("Claim now"), a:has-text("Claim"), button:has-text("Claim")',
         "google_button": 'button:has-text("Google"), a:has-text("Google")',
+        "menu_selector": 'button[aria-label*="menu" i], button:has(svg), .hamburger, [class*="menu"] button',
+        "close_modal_selectors": [
+            'button[aria-label*="close" i]',
+            'button:has-text("No thanks")',
+            'button:has-text("Maybe later")',
+            'button:has-text("Close")',
+            '.modal button:has-text("×")'
+        ]
     },
     "fortunecoins": {
         "login_url": "https://www.fortunecoins.com/",
@@ -163,6 +171,8 @@ def _candidate_selectors() -> list[str]:
     return [
         'button:has-text("Claim")',
         'a:has-text("Claim")',
+        'button:has-text("Claim now")',
+        'a:has-text("Claim now")',
         'button:has-text("Collect")',
         'a:has-text("Collect")',
         'button:has-text("Redeem")',
@@ -247,6 +257,24 @@ def run_claim(casino: str, promo_url: str, dry_run: bool = True) -> ClaimRunResu
         target_url = _resolve_url(promo_url)
         page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(1500)
+
+        if casino_key == "modo":
+            # Often requires opening hamburger menu first
+            try:
+                menu_sel = cfg.get("menu_selector", "")
+                if menu_sel and page.locator(menu_sel).count() > 0:
+                    page.locator(menu_sel).first.click(timeout=2000)
+                    page.wait_for_timeout(1000)
+            except Exception:
+                pass
+            # Occasionally a purchase modal blocks the claim controls
+            for sel in cfg.get("close_modal_selectors", []):
+                try:
+                    if page.locator(sel).count() > 0:
+                        page.locator(sel).first.click(timeout=1500)
+                        page.wait_for_timeout(500)
+                except Exception:
+                    continue
 
         # Save html snapshot for debugging
         html_path = Path(f"artifacts/{casino_key}-page.html")
