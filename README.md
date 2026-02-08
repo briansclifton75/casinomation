@@ -74,11 +74,12 @@ Protected (requires `Authorization: Bearer <key>` or `X-API-Key: <key>`):
 
 - `GET /api/totals`
 - `GET /api/claims`
+- `GET /api/promos/pending`
 - `GET /api/claims.csv`
 - `POST /api/collect`
 - `POST /api/email` with JSON `{ "sender": "...", "subject": "...", "body": "..." }`
 - `POST /api/email/scan` with optional JSON `{ "max_messages": 30 }`
-- `POST /api/claim/run` with JSON `{ "casino": "chumba", "promo_url": "...", "dry_run": true }`
+- `POST /api/claim/run` with JSON `{ "casino": "chumba", "promo_url": "...", "dry_run": true }` or `{ "claim_id": 123, "casino": "chumba", "dry_run": true }`
 
 ### Example
 

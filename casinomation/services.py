@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable
+import os
 import re
 
 from .db import ClaimStore
@@ -15,6 +16,7 @@ class RewardEvent:
     amount_sc: float
     status: str
     details: str
+    claim_url: str = ""
 
 
 class CasinoCollector:
@@ -53,7 +55,7 @@ class EmailPromoParser:
     def __init__(self, store: ClaimStore) -> None:
         self.store = store
 
-    def parse_email_text(self, sender: str, subject: str, body: str) -> list[RewardEvent]:
+    def parse_email_text(self, sender: str, subject: str, body: str, claim_url: str = "") -> list[RewardEvent]:
         text = f"{subject}\n{body}"
         events: list[RewardEvent] = []
 
@@ -68,6 +70,7 @@ class EmailPromoParser:
                             amount_sc=amount,
                             status="manual_required",
                             details="Promo SC found in email; open source link to claim.",
+                            claim_url=claim_url,
                         )
                     )
                 if "spins" in match.groupdict() and match.group("spins"):
@@ -79,6 +82,7 @@ class EmailPromoParser:
                             amount_sc=0,
                             status="manual_required",
                             details=f"{spins} free spins found in email promo.",
+                            claim_url=claim_url,
                         )
                     )
 
@@ -93,12 +97,20 @@ class RewardService:
         self.collector = CasinoCollector(store)
         self.parser = EmailPromoParser(store)
         self.imap = GmailPromoIngestor()
+        self.enable_dummy_collector = os.getenv("CASINOMATION_ENABLE_DUMMY_COLLECTOR", "false").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     def run_daily(self) -> list[RewardEvent]:
+        if not self.enable_dummy_collector:
+            return []
         return self.collector.run_daily_collection()
 
-    def ingest_email(self, sender: str, subject: str, body: str) -> list[RewardEvent]:
-        return self.parser.parse_email_text(sender, subject, body)
+    def ingest_email(self, sender: str, subject: str, body: str, claim_url: str = "") -> list[RewardEvent]:
+        return self.parser.parse_email_text(sender, subject, body, claim_url=claim_url)
 
     def recent_claims(self) -> Iterable:
         return self.store.list_claims()
@@ -117,7 +129,12 @@ class RewardService:
             if self.store.already_ingested(message_id):
                 continue
 
-            events = self.ingest_email(msg["sender"], msg["subject"], msg["body"])
+            events = self.ingest_email(
+                msg["sender"],
+                msg["subject"],
+                msg["body"],
+                claim_url=msg.get("claim_url", ""),
+            )
             self.store.mark_ingested(message_id, msg["sender"], msg["subject"])
             new_messages += 1
             new_events += len(events)
@@ -127,3 +144,6 @@ class RewardService:
             "new_messages": new_messages,
             "new_events": new_events,
         }
+
+    def pending_promos(self, limit: int = 50) -> list[dict]:
+        return [c.__dict__ for c in self.store.list_pending_promos(limit=limit)]

@@ -20,6 +20,7 @@ class Claim:
     status: str
     details: str
     claimed_at: str
+    claim_url: str = ""
 
 
 class ClaimStore:
@@ -43,7 +44,8 @@ class ClaimStore:
                     amount_sc REAL NOT NULL,
                     status TEXT NOT NULL,
                     details TEXT NOT NULL,
-                    claimed_at TEXT NOT NULL
+                    claimed_at TEXT NOT NULL,
+                    claim_url TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -57,6 +59,9 @@ class ClaimStore:
                 )
                 """
             )
+            columns = {row['name'] for row in conn.execute("PRAGMA table_info(claims)").fetchall()}
+            if 'claim_url' not in columns:
+                conn.execute("ALTER TABLE claims ADD COLUMN claim_url TEXT NOT NULL DEFAULT ''")
 
     def add_claim(
         self,
@@ -65,15 +70,16 @@ class ClaimStore:
         amount_sc: float,
         status: str,
         details: str,
+        claim_url: str = "",
     ) -> int:
         now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO claims (source, reward_type, amount_sc, status, details, claimed_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO claims (source, reward_type, amount_sc, status, details, claimed_at, claim_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (source, reward_type, amount_sc, status, details, now),
+                (source, reward_type, amount_sc, status, details, now, claim_url),
             )
             return int(cursor.lastrowid)
 
@@ -120,4 +126,29 @@ class ClaimStore:
                 VALUES (?, ?, ?, ?)
                 """,
                 (message_id, sender, subject, now),
+            )
+
+    def list_pending_promos(self, limit: int = 50) -> list[Claim]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM claims
+                WHERE status = 'manual_required' AND claim_url != ''
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [Claim(**dict(row)) for row in rows]
+
+    def get_claim(self, claim_id: int) -> Claim | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM claims WHERE id = ?", (claim_id,)).fetchone()
+        return Claim(**dict(row)) if row else None
+
+    def update_claim_status(self, claim_id: int, status: str, details: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE claims SET status = ?, details = ? WHERE id = ?",
+                (status, details, claim_id),
             )

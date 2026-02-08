@@ -220,7 +220,7 @@ class AppHandler(BaseHTTPRequestHandler):
     <tbody>{claims_rows}</tbody>
   </table>
 
-  <p>API: <code>GET /api/health</code>, <code>GET /api/totals</code>, <code>GET /api/claims</code>, <code>GET /api/claims.csv</code>, <code>POST /api/collect</code>, <code>POST /api/email</code>, <code>POST /api/email/scan</code>, <code>POST /api/claim/run</code></p>
+  <p>API: <code>GET /api/health</code>, <code>GET /api/totals</code>, <code>GET /api/claims</code>, <code>GET /api/promos/pending</code>, <code>GET /api/claims.csv</code>, <code>POST /api/collect</code>, <code>POST /api/email</code>, <code>POST /api/email/scan</code>, <code>POST /api/claim/run</code></p>
   <p class=\"muted\">{html.escape(auth_hint)} Scheduler: {'enabled' if SCHEDULE_ENABLED else 'disabled'} at {html.escape(SCHEDULE_TIME)} local time. Rate limit: {'on' if RATE_LIMIT_ENABLED else 'off'} ({RATE_LIMIT_MAX}/{RATE_LIMIT_WINDOW_SEC}s).</p>
 </body>
 </html>
@@ -248,6 +248,11 @@ class AppHandler(BaseHTTPRequestHandler):
         if self.path == "/api/claims":
             claims = [c.__dict__ for c in service.recent_claims()]
             self._send_json(claims)
+            return
+
+        if self.path == "/api/promos/pending":
+            limit = int(self.headers.get("X-Limit", "50") or 50)
+            self._send_json(service.pending_promos(limit=limit))
             return
 
         if self.path == "/api/claims.csv":
@@ -329,12 +334,23 @@ class AppHandler(BaseHTTPRequestHandler):
         if self.path == "/api/claim/run":
             casino = payload.get("casino", "chumba")
             promo_url = payload.get("promo_url", "")
+            claim_id = int(payload.get("claim_id", 0) or 0)
             dry_run = str(payload.get("dry_run", "true")).lower() in {"1", "true", "yes", "on"}
+
+            if claim_id and not promo_url:
+                claim = store.get_claim(claim_id)
+                if not claim or not claim.claim_url:
+                    self._send_json({"error": "claim_id not found or missing claim_url"}, HTTPStatus.BAD_REQUEST)
+                    return
+                promo_url = claim.claim_url
+
             if not promo_url:
                 self._send_json({"error": "promo_url is required"}, HTTPStatus.BAD_REQUEST)
                 return
 
             result = run_claim_dict(casino=casino, promo_url=promo_url, dry_run=dry_run)
+            if claim_id and result.get("status") in {"claimed", "failed", "manual_required"}:
+                store.update_claim_status(claim_id, result["status"], result.get("details", ""))
             self._send_json(result)
             return
 

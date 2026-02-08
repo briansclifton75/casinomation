@@ -4,9 +4,11 @@ import email
 import imaplib
 import os
 import re
+from datetime import datetime, timedelta
 from email.header import decode_header
 from email.message import Message
 from typing import Iterable
+from urllib.parse import urlparse
 
 
 def _decode_mime(value: str | None) -> str:
@@ -62,6 +64,28 @@ def _message_body(msg: Message) -> str:
     return body
 
 
+def _extract_urls(text: str) -> list[str]:
+    return list(dict.fromkeys(re.findall(r"https?://[^\s\"'<>\)]+", text)))
+
+
+def _best_claim_url(urls: list[str]) -> str:
+    if not urls:
+        return ""
+    priority_terms = ("promo", "promotion", "bonus", "offer", "lobby", "claim")
+    for u in urls:
+        parsed = urlparse(u)
+        host = parsed.netloc.lower()
+        if any(x in host for x in ("casino", "chumba", "luckyland", "globalpoker", "modo", "fortunecoins", "yaycasino")):
+            if any(t in u.lower() for t in priority_terms):
+                return u
+    for u in urls:
+        parsed = urlparse(u)
+        host = parsed.netloc.lower()
+        if any(x in host for x in ("casino", "chumba", "luckyland", "globalpoker", "modo", "fortunecoins", "yaycasino")):
+            return u
+    return urls[0]
+
+
 class GmailPromoIngestor:
     def __init__(self) -> None:
         self.host = os.getenv("CASINOMATION_IMAP_HOST", "imap.gmail.com")
@@ -78,42 +102,52 @@ class GmailPromoIngestor:
         if not self.configured():
             return []
 
-        with imaplib.IMAP4_SSL(self.host, self.port) as mail:
-            mail.login(self.user, self.password)
-            mail.select("INBOX")
-            status, data = mail.search(None, "ALL")
-            if status != "OK":
-                return []
+        days_back = int(os.getenv("CASINOMATION_IMAP_DAYS_BACK", "14"))
+        since = (datetime.utcnow() - timedelta(days=days_back)).strftime("%d-%b-%Y")
 
-            ids = [x for x in data[0].split() if x][-max_messages:]
-            results: list[dict[str, str]] = []
+        results: list[dict[str, str]] = []
+        try:
+            with imaplib.IMAP4_SSL(self.host, self.port) as mail:
+                mail.login(self.user, self.password)
+                mail.select("INBOX")
 
-            for msg_id in reversed(ids):
-                res, msg_data = mail.fetch(msg_id, "(RFC822)")
-                if res != "OK" or not msg_data:
-                    continue
+                status, data = mail.search(None, "SINCE", since)
+                if status != "OK" or not data or not data[0]:
+                    return []
 
-                raw_email = msg_data[0][1]
-                if not raw_email:
-                    continue
+                ids = [x for x in data[0].split() if x][-max_messages:]
 
-                msg = email.message_from_bytes(raw_email)
-                sender = _decode_mime(msg.get("From"))
-                sender_l = sender.lower()
-                if self.allowlist and not any(a in sender_l for a in self.allowlist):
-                    continue
+                for msg_id in reversed(ids):
+                    res, msg_data = mail.fetch(msg_id, "(RFC822)")
+                    if res != "OK" or not msg_data:
+                        continue
 
-                message_id = _decode_mime(msg.get("Message-ID")) or f"imap-{msg_id.decode()}"
-                subject = _decode_mime(msg.get("Subject"))
-                body = _message_body(msg)
+                    raw_email = msg_data[0][1]
+                    if not raw_email:
+                        continue
 
-                results.append(
-                    {
-                        "message_id": message_id.strip(),
-                        "sender": sender.strip(),
-                        "subject": subject.strip(),
-                        "body": body.strip(),
-                    }
-                )
+                    msg = email.message_from_bytes(raw_email)
+                    sender = _decode_mime(msg.get("From"))
+                    sender_l = sender.lower()
+                    if self.allowlist and not any(a in sender_l for a in self.allowlist):
+                        continue
 
-            return results
+                    message_id = _decode_mime(msg.get("Message-ID")) or f"imap-{msg_id.decode()}"
+                    subject = _decode_mime(msg.get("Subject"))
+                    body = _message_body(msg)
+
+                    urls = _extract_urls(f"{subject}\n{body}")
+                    results.append(
+                        {
+                            "message_id": message_id.strip(),
+                            "sender": sender.strip(),
+                            "subject": subject.strip(),
+                            "body": body.strip(),
+                            "urls": urls,
+                            "claim_url": _best_claim_url(urls),
+                        }
+                    )
+        except imaplib.IMAP4.error:
+            return []
+
+        return results
