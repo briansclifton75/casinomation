@@ -120,6 +120,19 @@ class EmailPromoParser:
                         )
                     )
 
+        if not events:
+            events.append(
+                RewardEvent(
+                    source=sender,
+                    reward_type="promo_link",
+                    amount_sc=0,
+                    status="manual_required",
+                    details="Promo link detected; amount not parsed yet.",
+                    claim_url=claim_url,
+                    casino=casino,
+                )
+            )
+
         for event in events:
             self.store.add_claim(**event.__dict__)
         return events

@@ -138,7 +138,7 @@ class ClaimStore:
             rows = conn.execute(
                 """
                 SELECT * FROM claims
-                WHERE status = 'manual_required' AND claim_url != '' AND casino != 'unknown'
+                WHERE status IN ('manual_required','failed') AND claim_url != '' AND casino != 'unknown'
                 ORDER BY id DESC
                 LIMIT ?
                 """,
