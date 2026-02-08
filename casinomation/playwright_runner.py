@@ -9,6 +9,9 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
 from pathlib import Path
+from urllib.parse import urlparse
+
+import requests
 
 
 @dataclass
@@ -148,6 +151,33 @@ def _is_logged_in(page, cfg: dict) -> bool:
         return False
 
 
+def _resolve_url(url: str) -> str:
+    try:
+        r = requests.get(url, timeout=20, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+        return r.url or url
+    except Exception:
+        return url
+
+
+def _candidate_selectors() -> list[str]:
+    return [
+        'button:has-text("Claim")',
+        'a:has-text("Claim")',
+        'button:has-text("Collect")',
+        'a:has-text("Collect")',
+        'button:has-text("Redeem")',
+        'a:has-text("Redeem")',
+        'button:has-text("Get")',
+        'a:has-text("Get")',
+        'button:has-text("Bonus")',
+        'a:has-text("Bonus")',
+        'button:has-text("Spin")',
+        'a:has-text("Spin")',
+        '[data-testid*="claim"]',
+        '[class*="claim"]',
+    ]
+
+
 def run_claim(casino: str, promo_url: str, dry_run: bool = True) -> ClaimRunResult:
     casino_key = casino.lower().strip()
     cfg = ADAPTERS.get(casino_key)
@@ -214,16 +244,35 @@ def run_claim(casino: str, promo_url: str, dry_run: bool = True) -> ClaimRunResu
                 browser.close()
                 return ClaimRunResult(casino, "manual_required", "Login selectors failed or MFA/captcha gate hit", screenshot_path)
 
-        page.goto(promo_url, wait_until="domcontentloaded", timeout=45000)
+        target_url = _resolve_url(promo_url)
+        page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
+        page.wait_for_timeout(1500)
 
-        if page.locator(cfg["claim_selector"]).count() > 0:
-            page.locator(cfg["claim_selector"]).first.click()
-            page.wait_for_timeout(2500)
+        # Save html snapshot for debugging
+        html_path = Path(f"artifacts/{casino_key}-page.html")
+        html_path.write_text(page.content(), encoding="utf-8")
+
+        clicked = False
+        used_selector = ""
+        selectors = [cfg["claim_selector"], *_candidate_selectors()]
+        for sel in selectors:
+            try:
+                loc = page.locator(sel)
+                if loc.count() > 0:
+                    loc.first.click(timeout=2500)
+                    page.wait_for_timeout(2200)
+                    clicked = True
+                    used_selector = sel
+                    break
+            except Exception:
+                continue
+
+        if clicked:
             status = "claimed"
-            details = "Claim button clicked"
+            details = f"Claim interaction clicked using selector: {used_selector}"
         else:
             status = "manual_required"
-            details = "No claim button found; captcha/2FA or selector tuning needed"
+            details = "No claim control found; likely gated by captcha/2FA/UI variant"
 
         page.screenshot(path=screenshot_path, full_page=True)
         context.storage_state(path=str(storage_state))
