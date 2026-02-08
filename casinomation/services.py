@@ -58,6 +58,33 @@ PROMO_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?P<spins>\d+)\s*free\s*spins?", re.IGNORECASE),
 )
 
+FREE_GIFT_HINTS = (
+    "free spins",
+    "free spin",
+    "free coins",
+    "free sc",
+    "daily bonus",
+    "claim now",
+    "no purchase necessary",
+    "gift",
+    "reward",
+)
+
+DEPOSIT_REQUIRED_HINTS = (
+    "deposit required",
+    "minimum deposit",
+    "min deposit",
+    "with purchase",
+    "buy coins",
+    "purchase required",
+    "first purchase",
+    "top up",
+    "welcome back offer",
+    "40% off",
+    "50% off",
+    "% off",
+)
+
 
 def _detect_casino(sender: str, claim_url: str) -> str:
     blob = f"{sender} {claim_url}".lower()
@@ -79,6 +106,13 @@ def _is_valid_claim_url(url: str) -> bool:
     return any(h in host for h in ("casino", "chumba", "modo", "fortunecoins", "luckyland", "globalpoker", "hardrock", "yay"))
 
 
+def _is_no_deposit_gift_email(subject: str, body: str) -> bool:
+    text = f"{subject}\n{body}".lower()
+    has_free_signal = any(h in text for h in FREE_GIFT_HINTS)
+    has_deposit_signal = any(h in text for h in DEPOSIT_REQUIRED_HINTS)
+    return has_free_signal and not has_deposit_signal
+
+
 class EmailPromoParser:
     def __init__(self, store: ClaimStore) -> None:
         self.store = store
@@ -89,6 +123,9 @@ class EmailPromoParser:
         casino = _detect_casino(sender, claim_url)
 
         if casino == "unknown" or not _is_valid_claim_url(claim_url):
+            return []
+
+        if not _is_no_deposit_gift_email(subject, body):
             return []
 
         for pattern in PROMO_PATTERNS:
@@ -169,11 +206,17 @@ class RewardService:
         scanned = 0
         new_messages = 0
         new_events = 0
+        filtered_deposit_required = 0
 
         for msg in self.imap.fetch_recent(max_messages=max_messages):
             scanned += 1
             message_id = msg["message_id"]
             if self.store.already_ingested(message_id):
+                continue
+
+            if not _is_no_deposit_gift_email(msg["subject"], msg["body"]):
+                filtered_deposit_required += 1
+                self.store.mark_ingested(message_id, msg["sender"], msg["subject"])
                 continue
 
             events = self.ingest_email(
@@ -190,6 +233,7 @@ class RewardService:
             "scanned": scanned,
             "new_messages": new_messages,
             "new_events": new_events,
+            "filtered_deposit_required": filtered_deposit_required,
         }
 
     def pending_promos(self, limit: int = 50) -> list[dict]:
