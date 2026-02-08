@@ -55,6 +55,13 @@ export CASINOMATION_IMAP_USER="you@gmail.com"
 export CASINOMATION_IMAP_APP_PASSWORD="xxxx xxxx xxxx xxxx"
 export CASINOMATION_EMAIL_ALLOWLIST="chumbacasino,globalpoker,luckyland"
 export CASINOMATION_EMAIL_SCAN_INTERVAL_MIN="15"
+
+# Keep dummy collector off (recommended)
+export CASINOMATION_ENABLE_DUMMY_COLLECTOR="false"
+
+# Playwright credentials (phase 5, chumba adapter)
+export CASINOMATION_CHUMBA_USER="you@example.com"
+export CASINOMATION_CHUMBA_PASSWORD="your-password"
 ```
 
 ## API endpoints
@@ -71,6 +78,7 @@ Protected (requires `Authorization: Bearer <key>` or `X-API-Key: <key>`):
 - `POST /api/collect`
 - `POST /api/email` with JSON `{ "sender": "...", "subject": "...", "body": "..." }`
 - `POST /api/email/scan` with optional JSON `{ "max_messages": 30 }`
+- `POST /api/claim/run` with JSON `{ "casino": "chumba", "promo_url": "...", "dry_run": true }`
 
 ### Example
 
@@ -91,6 +99,8 @@ Then open <http://localhost:8000>.
 ```bash
 python -m unittest discover -s tests -p 'test_*.py'
 python -m py_compile app.py casinomation/*.py
+pip install -r requirements.txt
+playwright install chromium
 ```
 
 ## Notes

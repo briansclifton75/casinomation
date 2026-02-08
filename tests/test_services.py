@@ -1,6 +1,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+import os
 
 from casinomation.db import ClaimStore
 from casinomation.services import EmailPromoParser, RewardService
@@ -27,11 +28,13 @@ class ServicesTest(unittest.TestCase):
         self.assertEqual(totals["free_spins"], 1.0)
 
     def test_daily_collector_records_claims(self) -> None:
+        os.environ["CASINOMATION_ENABLE_DUMMY_COLLECTOR"] = "true"
         service = RewardService(self.store)
         events = service.run_daily()
         self.assertEqual(len(events), 3)
         claims = list(service.recent_claims())
         self.assertEqual(len(claims), 3)
+        os.environ["CASINOMATION_ENABLE_DUMMY_COLLECTOR"] = "false"
 
 
 if __name__ == "__main__":
