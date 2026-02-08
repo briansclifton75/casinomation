@@ -67,6 +67,13 @@ export CASINOMATION_MODO_PASSWORD="your-password"
 export CASINOMATION_FORTUNE_USER="you@example.com"
 export CASINOMATION_FORTUNE_PASSWORD="your-password"
 
+# optional Google auth mode (tries inbox OTP + persists session)
+export CASINOMATION_MODO_GOOGLE_AUTH="true"
+export CASINOMATION_CHUMBA_GOOGLE_AUTH="false"
+export CASINOMATION_FORTUNECOINS_GOOGLE_AUTH="false"
+export CASINOMATION_GOOGLE_OTP_SENDER="google"
+export CASINOMATION_BROWSER_HEADLESS="false"  # recommended for first login bootstrap
+
 # auto-run safety
 export CASINOMATION_AUTO_RUN_MAX="3"
 export CASINOMATION_AUTO_RUN_DRY="true"
