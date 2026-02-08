@@ -2,11 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable
+from urllib.parse import urlparse
 import os
 import re
 
 from .db import ClaimStore
 from .email_ingest import GmailPromoIngestor
+
+
+CASINO_HINTS = {
+    "chumba": ("chumba", "chumbacasino.com"),
+    "modo": ("modo", "modo.us"),
+    "fortunecoins": ("fortune coins", "fortunecoins"),
+    "hardrock": ("hard rock", "hardrock"),
+    "yay": ("yaycasino", "yaycasino.com"),
+    "luckyland": ("luckyland",),
+    "globalpoker": ("global poker", "globalpoker"),
+}
 
 
 @dataclass
@@ -17,14 +29,10 @@ class RewardEvent:
     status: str
     details: str
     claim_url: str = ""
+    casino: str = "unknown"
 
 
 class CasinoCollector:
-    """MVP-safe collector simulation.
-
-    Real automation should be added per-casino and comply with terms/captcha policies.
-    """
-
     def __init__(self, store: ClaimStore) -> None:
         self.store = store
 
@@ -51,6 +59,26 @@ PROMO_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+def _detect_casino(sender: str, claim_url: str) -> str:
+    blob = f"{sender} {claim_url}".lower()
+    for casino, hints in CASINO_HINTS.items():
+        if any(h in blob for h in hints):
+            return casino
+    return "unknown"
+
+
+def _is_valid_claim_url(url: str) -> bool:
+    if not url:
+        return False
+    if any(x in url.lower() for x in ("schema.org", "sendgrid", "fonts.googleapis", "w3.org")):
+        return False
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = parsed.netloc.lower()
+    return any(h in host for h in ("casino", "chumba", "modo", "fortunecoins", "luckyland", "globalpoker", "hardrock", "yay"))
+
+
 class EmailPromoParser:
     def __init__(self, store: ClaimStore) -> None:
         self.store = store
@@ -58,6 +86,10 @@ class EmailPromoParser:
     def parse_email_text(self, sender: str, subject: str, body: str, claim_url: str = "") -> list[RewardEvent]:
         text = f"{subject}\n{body}"
         events: list[RewardEvent] = []
+        casino = _detect_casino(sender, claim_url)
+
+        if casino == "unknown" or not _is_valid_claim_url(claim_url):
+            return []
 
         for pattern in PROMO_PATTERNS:
             for match in pattern.finditer(text):
@@ -71,6 +103,7 @@ class EmailPromoParser:
                             status="manual_required",
                             details="Promo SC found in email; open source link to claim.",
                             claim_url=claim_url,
+                            casino=casino,
                         )
                     )
                 if "spins" in match.groupdict() and match.group("spins"):
@@ -83,6 +116,7 @@ class EmailPromoParser:
                             status="manual_required",
                             details=f"{spins} free spins found in email promo.",
                             claim_url=claim_url,
+                            casino=casino,
                         )
                     )
 

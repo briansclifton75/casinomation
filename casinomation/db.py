@@ -21,6 +21,7 @@ class Claim:
     details: str
     claimed_at: str
     claim_url: str = ""
+    casino: str = "unknown"
 
 
 class ClaimStore:
@@ -45,7 +46,8 @@ class ClaimStore:
                     status TEXT NOT NULL,
                     details TEXT NOT NULL,
                     claimed_at TEXT NOT NULL,
-                    claim_url TEXT NOT NULL DEFAULT ''
+                    claim_url TEXT NOT NULL DEFAULT '',
+                    casino TEXT NOT NULL DEFAULT 'unknown'
                 )
                 """
             )
@@ -62,6 +64,8 @@ class ClaimStore:
             columns = {row['name'] for row in conn.execute("PRAGMA table_info(claims)").fetchall()}
             if 'claim_url' not in columns:
                 conn.execute("ALTER TABLE claims ADD COLUMN claim_url TEXT NOT NULL DEFAULT ''")
+            if 'casino' not in columns:
+                conn.execute("ALTER TABLE claims ADD COLUMN casino TEXT NOT NULL DEFAULT 'unknown'")
 
     def add_claim(
         self,
@@ -71,15 +75,16 @@ class ClaimStore:
         status: str,
         details: str,
         claim_url: str = "",
+        casino: str = "unknown",
     ) -> int:
         now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO claims (source, reward_type, amount_sc, status, details, claimed_at, claim_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO claims (source, reward_type, amount_sc, status, details, claimed_at, claim_url, casino)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (source, reward_type, amount_sc, status, details, now, claim_url),
+                (source, reward_type, amount_sc, status, details, now, claim_url, casino),
             )
             return int(cursor.lastrowid)
 
@@ -133,7 +138,7 @@ class ClaimStore:
             rows = conn.execute(
                 """
                 SELECT * FROM claims
-                WHERE status = 'manual_required' AND claim_url != ''
+                WHERE status = 'manual_required' AND claim_url != '' AND casino != 'unknown'
                 ORDER BY id DESC
                 LIMIT ?
                 """,

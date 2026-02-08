@@ -19,9 +19,10 @@ class ServicesTest(unittest.TestCase):
     def test_email_parser_finds_sc_and_spins(self) -> None:
         parser = EmailPromoParser(self.store)
         events = parser.parse_email_text(
-            "promo@test.com",
+            "promo@chumbacasino.com",
             "Claim 5 SC + 25 free spins",
             "Use link now for 1.5 SC bonus",
+            claim_url="https://lobby.chumbacasino.com/promo",
         )
         self.assertEqual(len(events), 3)
         totals = self.store.totals()

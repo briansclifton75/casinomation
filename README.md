@@ -59,9 +59,17 @@ export CASINOMATION_EMAIL_SCAN_INTERVAL_MIN="15"
 # Keep dummy collector off (recommended)
 export CASINOMATION_ENABLE_DUMMY_COLLECTOR="false"
 
-# Playwright credentials (phase 5, chumba adapter)
+# Playwright credentials
 export CASINOMATION_CHUMBA_USER="you@example.com"
 export CASINOMATION_CHUMBA_PASSWORD="your-password"
+export CASINOMATION_MODO_USER="you@example.com"
+export CASINOMATION_MODO_PASSWORD="your-password"
+export CASINOMATION_FORTUNE_USER="you@example.com"
+export CASINOMATION_FORTUNE_PASSWORD="your-password"
+
+# auto-run safety
+export CASINOMATION_AUTO_RUN_MAX="3"
+export CASINOMATION_AUTO_RUN_DRY="true"
 ```
 
 ## API endpoints
@@ -79,7 +87,8 @@ Protected (requires `Authorization: Bearer <key>` or `X-API-Key: <key>`):
 - `POST /api/collect`
 - `POST /api/email` with JSON `{ "sender": "...", "subject": "...", "body": "..." }`
 - `POST /api/email/scan` with optional JSON `{ "max_messages": 30 }`
-- `POST /api/claim/run` with JSON `{ "casino": "chumba", "promo_url": "...", "dry_run": true }` or `{ "claim_id": 123, "casino": "chumba", "dry_run": true }`
+- `POST /api/claim/run` with JSON `{ "casino": "chumba", "promo_url": "...", "dry_run": true }` or `{ "claim_id": 123, "dry_run": true }`
+- `POST /api/claim/auto-run` with optional JSON `{ "max_runs": 3, "dry_run": false }`
 
 ### Example
 

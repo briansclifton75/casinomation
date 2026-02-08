@@ -43,6 +43,8 @@ RATE_LIMIT_ENABLED = os.getenv("CASINOMATION_RATE_LIMIT_ENABLED", "true").lower(
 }
 RATE_LIMIT_MAX = int(os.getenv("CASINOMATION_RATE_LIMIT_MAX", "60"))
 RATE_LIMIT_WINDOW_SEC = int(os.getenv("CASINOMATION_RATE_LIMIT_WINDOW_SEC", "60"))
+AUTO_RUN_MAX = int(os.getenv("CASINOMATION_AUTO_RUN_MAX", "3"))
+AUTO_RUN_DRY = os.getenv("CASINOMATION_AUTO_RUN_DRY", "true").lower() in {"1", "true", "yes", "on"}
 
 _rate_limit_lock = threading.Lock()
 _rate_limit_buckets: dict[str, tuple[float, int]] = {}
@@ -343,6 +345,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     self._send_json({"error": "claim_id not found or missing claim_url"}, HTTPStatus.BAD_REQUEST)
                     return
                 promo_url = claim.claim_url
+                if claim.casino and claim.casino != "unknown":
+                    casino = claim.casino
 
             if not promo_url:
                 self._send_json({"error": "promo_url is required"}, HTTPStatus.BAD_REQUEST)
@@ -352,6 +356,25 @@ class AppHandler(BaseHTTPRequestHandler):
             if claim_id and result.get("status") in {"claimed", "failed", "manual_required"}:
                 store.update_claim_status(claim_id, result["status"], result.get("details", ""))
             self._send_json(result)
+            return
+
+        if self.path == "/api/claim/auto-run":
+            dry_run = str(payload.get("dry_run", str(AUTO_RUN_DRY).lower())).lower() in {"1", "true", "yes", "on"}
+            max_runs = int(payload.get("max_runs", AUTO_RUN_MAX) or AUTO_RUN_MAX)
+            pending = service.pending_promos(limit=max_runs)
+            results: list[dict] = []
+            for claim in pending:
+                casino = claim.get("casino", "chumba") or "chumba"
+                promo_url = claim.get("claim_url", "")
+                cid = int(claim["id"])
+                if not promo_url:
+                    continue
+                result = run_claim_dict(casino=casino, promo_url=promo_url, dry_run=dry_run)
+                if result.get("status") in {"claimed", "failed", "manual_required"}:
+                    store.update_claim_status(cid, result["status"], result.get("details", ""))
+                result["claim_id"] = cid
+                results.append(result)
+            self._send_json({"count": len(results), "results": results})
             return
 
         self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
