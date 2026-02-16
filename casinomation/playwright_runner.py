@@ -259,6 +259,14 @@ def run_claim(casino: str, promo_url: str, dry_run: bool = True) -> ClaimRunResu
         page.wait_for_timeout(1500)
 
         if casino_key == "modo":
+            # Open promotions surface explicitly (mobile bottom-nav often defaults to lobby)
+            try:
+                if page.locator('a:has-text("Promotions"), button:has-text("Promotions")').count() > 0:
+                    page.locator('a:has-text("Promotions"), button:has-text("Promotions")').first.click(timeout=2000)
+                    page.wait_for_timeout(1200)
+            except Exception:
+                pass
+
             # Often requires opening hamburger menu first
             try:
                 menu_sel = cfg.get("menu_selector", "")
@@ -267,6 +275,7 @@ def run_claim(casino: str, promo_url: str, dry_run: bool = True) -> ClaimRunResu
                     page.wait_for_timeout(1000)
             except Exception:
                 pass
+
             # Occasionally a purchase modal blocks the claim controls
             for sel in cfg.get("close_modal_selectors", []):
                 try:
@@ -275,6 +284,14 @@ def run_claim(casino: str, promo_url: str, dry_run: bool = True) -> ClaimRunResu
                         page.wait_for_timeout(500)
                 except Exception:
                     continue
+
+            # From your screenshots: Daily Bonus card contains "Claim now!"
+            try:
+                if page.locator('text=Daily Bonus').count() > 0:
+                    page.locator('text=Daily Bonus').first.click(timeout=2000)
+                    page.wait_for_timeout(800)
+            except Exception:
+                pass
 
         # Save html snapshot for debugging
         html_path = Path(f"artifacts/{casino_key}-page.html")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 from urllib.parse import urlparse
+import hashlib
 import os
 import re
 
@@ -85,6 +86,13 @@ DEPOSIT_REQUIRED_HINTS = (
     "% off",
 )
 
+NO_DEPOSIT_SAFE_PHRASES = (
+    "no deposit required",
+    "without deposit",
+    "no purchase necessary",
+    "without purchase",
+)
+
 
 def _detect_casino(sender: str, claim_url: str) -> str:
     blob = f"{sender} {claim_url}".lower()
@@ -94,22 +102,37 @@ def _detect_casino(sender: str, claim_url: str) -> str:
     return "unknown"
 
 
-def _is_valid_claim_url(url: str) -> bool:
+def _is_valid_claim_url(url: str, casino: str = "unknown") -> bool:
     if not url:
         return False
-    if any(x in url.lower() for x in ("schema.org", "sendgrid", "fonts.googleapis", "w3.org")):
+    if any(x in url.lower() for x in ("schema.org", "fonts.googleapis", "w3.org")):
         return False
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         return False
     host = parsed.netloc.lower()
-    return any(h in host for h in ("casino", "chumba", "modo", "fortunecoins", "luckyland", "globalpoker", "hardrock", "yay"))
+
+    # Direct casino domains are always allowed
+    if any(h in host for h in ("casino", "chumba", "modo", "fortunecoins", "luckyland", "globalpoker", "hardrock", "yay")):
+        return True
+
+    # Tracking/redirect links are allowed when sender+content already mapped to a known casino
+    if casino != "unknown":
+        return True
+
+    return False
 
 
 def _is_no_deposit_gift_email(subject: str, body: str) -> bool:
     text = f"{subject}\n{body}".lower()
     has_free_signal = any(h in text for h in FREE_GIFT_HINTS)
-    has_deposit_signal = any(h in text for h in DEPOSIT_REQUIRED_HINTS)
+
+    # Prevent false negatives like "no deposit required" matching "deposit required".
+    normalized = text
+    for phrase in NO_DEPOSIT_SAFE_PHRASES:
+        normalized = normalized.replace(phrase, " ")
+
+    has_deposit_signal = any(h in normalized for h in DEPOSIT_REQUIRED_HINTS)
     return has_free_signal and not has_deposit_signal
 
 
@@ -122,7 +145,7 @@ class EmailPromoParser:
         events: list[RewardEvent] = []
         casino = _detect_casino(sender, claim_url)
 
-        if casino == "unknown" or not _is_valid_claim_url(claim_url):
+        if casino == "unknown" or not _is_valid_claim_url(claim_url, casino=casino):
             return []
 
         if not _is_no_deposit_gift_email(subject, body):
@@ -207,25 +230,36 @@ class RewardService:
         new_messages = 0
         new_events = 0
         filtered_deposit_required = 0
+        skipped_invalid = 0
 
-        for msg in self.imap.fetch_recent(max_messages=max_messages):
+        for raw_msg in self.imap.fetch_recent(max_messages=max_messages):
             scanned += 1
-            message_id = msg["message_id"]
+            if not isinstance(raw_msg, dict):
+                skipped_invalid += 1
+                continue
+
+            sender = str(raw_msg.get("sender", "")).strip()
+            subject = str(raw_msg.get("subject", "")).strip()
+            body = str(raw_msg.get("body", "")).strip()
+            claim_url = str(raw_msg.get("claim_url", "") or "").strip()
+
+            raw_message_id = str(raw_msg.get("message_id", "")).strip()
+            if raw_message_id:
+                message_id = raw_message_id
+            else:
+                digest_input = f"{sender}\n{subject}\n{body}\n{claim_url}".encode("utf-8", errors="ignore")
+                message_id = f"synthetic-{hashlib.sha256(digest_input).hexdigest()[:24]}"
+
             if self.store.already_ingested(message_id):
                 continue
 
-            if not _is_no_deposit_gift_email(msg["subject"], msg["body"]):
+            if not _is_no_deposit_gift_email(subject, body):
                 filtered_deposit_required += 1
-                self.store.mark_ingested(message_id, msg["sender"], msg["subject"])
+                self.store.mark_ingested(message_id, sender, subject)
                 continue
 
-            events = self.ingest_email(
-                msg["sender"],
-                msg["subject"],
-                msg["body"],
-                claim_url=msg.get("claim_url", ""),
-            )
-            self.store.mark_ingested(message_id, msg["sender"], msg["subject"])
+            events = self.ingest_email(sender, subject, body, claim_url=claim_url)
+            self.store.mark_ingested(message_id, sender, subject)
             new_messages += 1
             new_events += len(events)
 
@@ -234,6 +268,7 @@ class RewardService:
             "new_messages": new_messages,
             "new_events": new_events,
             "filtered_deposit_required": filtered_deposit_required,
+            "skipped_invalid": skipped_invalid,
         }
 
     def pending_promos(self, limit: int = 50) -> list[dict]:
